@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 from engine.findings import Finding
-from config import PEER_DEVIATION_STD_MULTIPLIER, PEER_DEVIATION_RATIO_FLOOR
+from config import PEER_MIN_CSE_COUNT, PEER_MIN_ELIGIBLE_ALERTS, PEER_STD_MULTIPLIER, PEER_MIN_RELATIVE_RATE
 from engine.data_store import DataStore
+from engine.semantics import is_known_yes, is_available
 
 def generate_finding_id(cse_id: str, rule_id: str, index: int) -> str:
     return f"{cse_id}-{rule_id.replace('-', '')}-{index:03d}"
@@ -10,73 +11,95 @@ def generate_finding_id(cse_id: str, rule_id: str, index: int) -> str:
 def check_peer1_deviation(store: DataStore) -> list[Finding]:
     """
     PEER-1: Escalation rate deviation from peer sector baseline.
-    Groups by sector, calculates operational escalation rate.
-    HIGH if < 0.25 * mean, MEDIUM if < mean - k*std OR < 0.5 * mean.
+    Uses LEAVE-ONE-OUT baseline. A target CSE is not compared against its own performance.
     """
     findings = []
     
-    # Group CSEs by sector
-    sectors = {}
+    # Pre-calculate operational escalation rates for all CSEs
+    cse_metrics = []
     
     for cse_id, profile in store._profiles_idx.items():
         data = store.get_cse_data(cse_id)
         alerts = data.get("alerts", [])
         
-        crit_high = [a for a in alerts if a.get("severity") in ("Critical", "High")]
-        if not crit_high:
+        # We define the peer metric as escalation rate for Critical/High closed alerts
+        eligible_alerts = [
+            a for a in alerts 
+            if a.get("severity") in ("Critical", "High") 
+            and a.get("disposition") == "Closed"
+            and is_available(a.get("escalated"))
+        ]
+        
+        if len(eligible_alerts) < PEER_MIN_ELIGIBLE_ALERTS:
             continue
             
-        total = len(crit_high)
-        escalated = sum(1 for a in crit_high if a.get("escalated") == "Yes")
-        rate = escalated / total
+        total_eligible = len(eligible_alerts)
+        escalated = sum(1 for a in eligible_alerts if is_known_yes(a.get("escalated")))
+        rate = escalated / total_eligible
         
         sector = profile.get("sector", "Unknown")
-        if sector not in sectors:
-            sectors[sector] = []
-            
-        sectors[sector].append({
-            "cse_id": cse_id,
-            "total": total,
-            "rate": rate,
-            "evidence": [a["alert_id"] for a in crit_high if a.get("escalated") == "No"]
-        })
-        
-    for sector, cse_stats in sectors.items():
-        if len(cse_stats) < 2:
+        if sector == "Unknown" or not is_available(sector):
             continue
             
-        rates = [s["rate"] for s in cse_stats]
-        sector_mean = sum(rates) / len(rates)
+        cse_metrics.append({
+            "cse_id": cse_id,
+            "sector": sector,
+            "total_eligible": total_eligible,
+            "rate": rate,
+            "evidence": [a["alert_id"] for a in eligible_alerts if not is_known_yes(a.get("escalated"))]
+        })
         
-        # Calculate standard deviation
-        if len(rates) > 1:
-            variance = sum((r - sector_mean) ** 2 for r in rates) / (len(rates) - 1)
-            sector_std = variance ** 0.5
-        else:
-            sector_std = 0
+    # Group by sector
+    sectors = {}
+    for c_stat in cse_metrics:
+        sec = c_stat["sector"]
+        if sec not in sectors:
+            sectors[sec] = []
+        sectors[sec].append(c_stat)
+        
+    for sector, members in sectors.items():
+        if len(members) < PEER_MIN_CSE_COUNT:
+            # Insufficient peer population
+            continue
             
-        threshold_std = sector_mean - (PEER_DEVIATION_STD_MULTIPLIER * sector_std)
-        threshold_half = 0.5 * sector_mean
-        threshold = max(threshold_std, threshold_half)
-        
-        for stat in cse_stats:
-            if stat["rate"] < threshold and stat["total"] > 0:
-                c_val = stat["rate"] * 100
-                p_val = sector_mean * 100
-                sev = "HIGH" if stat["rate"] < (0.25 * sector_mean) else "MEDIUM"
+        for target in members:
+            # Leave-one-out calculation
+            peers = [m for m in members if m["cse_id"] != target["cse_id"]]
+            peer_rates = [p["rate"] for p in peers]
+            
+            peer_mean = sum(peer_rates) / len(peer_rates)
+            
+            if len(peer_rates) > 1:
+                variance = sum((r - peer_mean) ** 2 for r in peer_rates) / (len(peer_rates) - 1)
+                peer_std = variance ** 0.5
+            else:
+                peer_std = 0
+                
+            threshold_std = peer_mean - (PEER_STD_MULTIPLIER * peer_std)
+            threshold_relative = PEER_MIN_RELATIVE_RATE * peer_mean
+            
+            # The deviation threshold is the stricter (lower) of the two constraints
+            threshold = min(threshold_std, threshold_relative)
+            
+            # Target must be materially below the threshold
+            if target["rate"] < threshold:
+                sev = "HIGH" if target["rate"] < (0.25 * peer_mean) else "MEDIUM"
+                
+                c_val = target["rate"] * 100
+                p_val = peer_mean * 100
                 
                 findings.append(Finding(
-                    finding_id=generate_finding_id(stat["cse_id"], "PEER-1", 1),
-                    cse_id=stat["cse_id"],
+                    finding_id=generate_finding_id(target["cse_id"], "PEER-1", 1),
+                    cse_id=target["cse_id"],
                     rule_id="PEER-1",
                     category="peer_deviation",
                     severity=sev,
-                    title="Potential peer deviation signal",
-                    explanation=f"Critical/High escalation rate ({int(c_val)}%) is significantly below the peer baseline for sector '{sector}' ({int(p_val)}%). This is a comparative deviation signal requiring context review.",
-                    evidence_ids=[stat["evidence"]],
-                    metric_value=stat["rate"],
-                    peer_value=sector_mean,
+                    title="Escalation rate below comparable peer baseline",
+                    explanation=f"Escalation rate ({int(c_val)}%) is materially below the Leave-One-Out comparable-peer baseline for sector '{sector}' ({int(p_val)}%, {len(peers)} peers).",
+                    evidence_ids=target["evidence"],
+                    metric_value=target["rate"],
+                    peer_value=peer_mean,
                     related_asset_type=None
                 ))
-            
+                
     return findings

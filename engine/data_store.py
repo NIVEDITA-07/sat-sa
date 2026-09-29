@@ -39,6 +39,15 @@ class DataStore:
         self._cases_df = df.copy()
         if not df.empty and 'case_id' in df.columns:
             self._cases_idx = df.drop_duplicates(subset=['case_id']).set_index('case_id').to_dict('index')
+            
+        # Build alert to case index
+        self._alert_to_case_idx = {}
+        if not df.empty and 'alert_id' in df.columns and 'case_id' in df.columns:
+            for _, row in df.iterrows():
+                a_id = row.get('alert_id')
+                c_id = row.get('case_id')
+                if pd.notna(a_id) and pd.notna(c_id):
+                    self._alert_to_case_idx[str(a_id)] = str(c_id)
 
     def validate_relationships(self) -> Dict[str, Any]:
         """
@@ -117,6 +126,17 @@ class DataStore:
         Returns the raw/normalized asset data for an evidence lookup.
         """
         return self._assets_idx.get(asset_id, {})
+
+    def get_case_for_alert(self, alert_id: str) -> Dict[str, Any]:
+        """
+        Returns the case associated with the primary_alert_id, or None.
+        """
+        if not hasattr(self, '_alert_to_case_idx'):
+            return None
+        case_id = self._alert_to_case_idx.get(alert_id)
+        if case_id:
+            return self.get_case_evidence(case_id)
+        return None
 
     @property
     def alerts_df(self): return self._alerts_df

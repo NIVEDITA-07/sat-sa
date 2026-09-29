@@ -1,7 +1,19 @@
 import pandas as pd
 from engine.findings import Finding
-from config import FAST_CLOSURE_MINUTES, REPEAT_ALERT_THRESHOLD, REPEAT_NO_REMEDIATION_RATIO
+from config import FAST_CLOSURE_MINUTES, REPEAT_ALERT_MIN_COUNT, REPEAT_UNREMEDIATED_RATIO
 from engine.data_store import DataStore
+from engine.semantics import (
+    resolve_escalation_expectation,
+    resolve_investigation_expectation,
+    resolve_remediation_expectation,
+    is_known_no,
+    is_known_yes,
+    is_available,
+    EXPECTATION_YES,
+    EVIDENCE_NO,
+    EVIDENCE_NOT_AVAILABLE,
+    EVIDENCE_YES
+)
 from collections import Counter
 
 def generate_finding_id(cse_id: str, rule_id: str, index: int) -> str:
@@ -20,113 +32,7 @@ def _get_top_asset_type(alerts: list, store: DataStore) -> str:
 
 def check_eg1_critical_no_escalation(store: DataStore) -> list[Finding]:
     """
-    EG-1: Critical/High alert closed without escalation.
-    Aggregates at the CSE level: one finding per CSE summarizing the violation rate.
-    """
-    findings = []
-    
-    for cse_id in store._profiles_idx.keys():
-        data = store.get_cse_data(cse_id)
-        alerts = data.get("alerts", [])
-        
-        # Filter for evaluable alerts: Critical/High and closed_at is present
-        evaluable = [a for a in alerts if a.get("severity") in ("Critical", "High") and pd.notna(a.get("closed_at")) and a.get("closed_at") != "NOT_AVAILABLE"]
-        
-        if not evaluable:
-            continue
-            
-        total_critical_closed = len(evaluable)
-        not_escalated = [a for a in evaluable if a.get("escalated") == "No"]
-        violation_count = len(not_escalated)
-        
-        if violation_count == 0:
-            continue
-            
-        violation_rate = violation_count / total_critical_closed
-        
-        # The prompt says: "Generate: rule_id = EG-1, category = execution_gap, severity = HIGH"
-        sev = "HIGH"
-            
-        top_asset_type = _get_top_asset_type(not_escalated, store)
-        evidence = [a['alert_id'] for a in not_escalated]
-        
-        findings.append(Finding(
-            finding_id=generate_finding_id(cse_id, "EG-1", 1),
-            cse_id=cse_id,
-            rule_id="EG-1",
-            category="execution_gap",
-            severity=sev,
-            title="Critical alerts closed without escalation",
-            explanation=f"{violation_count} of {total_critical_closed} critical alerts ({violation_rate:.0%}) were closed without mandatory Tier-2 supervisor escalation.",
-            evidence_ids=evidence,
-            metric_value=violation_rate,
-            related_asset_type=top_asset_type
-        ))
-    return findings
-
-def check_eg2_missing_investigation(store: DataStore) -> list[Finding]:
-    """
-    EG-2: High/Critical alert without investigation evidence.
-    Aggregated at the CSE level.
-    """
-    findings = []
-    
-    for cse_id in store._profiles_idx.keys():
-        data = store.get_cse_data(cse_id)
-        alerts = data.get("alerts", [])
-        
-        # We need cases for this CSE to check for 'Bypassed'
-        cases_df = store.cases_df
-        cse_cases = cases_df[cases_df['cse_id'] == cse_id] if not cases_df.empty and 'cse_id' in cases_df.columns else pd.DataFrame()
-        bypassed_alert_ids = set()
-        if not cse_cases.empty and 'investigation_status' in cse_cases.columns:
-            bypassed_alert_ids = set(cse_cases[cse_cases['investigation_status'] == 'Bypassed']['primary_alert_id'].dropna())
-        
-        evaluable = [a for a in alerts if a.get("severity") in ("Critical", "High") and a.get("disposition") == "Closed"]
-        
-        if not evaluable:
-            continue
-            
-        total = len(evaluable)
-        # explicitly indicates NO
-        no_investigation = [
-            a for a in evaluable 
-            if a.get("investigation_present") == "No" or a.get("alert_id") in bypassed_alert_ids
-        ]
-        
-        violation_count = len(no_investigation)
-        
-        if violation_count == 0:
-            continue
-            
-        violation_rate = violation_count / total
-        
-        has_critical = any(a.get("severity") == "Critical" for a in no_investigation)
-        if has_critical:
-            sev = "HIGH"
-        else:
-            sev = "MEDIUM"
-            
-        top_asset_type = _get_top_asset_type(no_investigation, store)
-        evidence = [a['alert_id'] for a in no_investigation]
-        
-        findings.append(Finding(
-            finding_id=generate_finding_id(cse_id, "EG-2", 1),
-            cse_id=cse_id,
-            rule_id="EG-2",
-            category="execution_gap",
-            severity=sev,
-            title="Alerts without investigation evidence",
-            explanation=f"{violation_count} of {total} critical/high alerts ({violation_rate:.0%}) explicitly lacked investigation prior to closure.",
-            evidence_ids=evidence,
-            metric_value=violation_rate,
-            related_asset_type=top_asset_type
-        ))
-    return findings
-
-def check_eg3_fast_closure(store: DataStore) -> list[Finding]:
-    """
-    EG-3: Suspiciously fast closure.
+    EG-1: Critical/High alerts were observed to close without recorded escalation where escalation was expected.
     Aggregated at the CSE level.
     """
     findings = []
@@ -136,27 +42,164 @@ def check_eg3_fast_closure(store: DataStore) -> list[Finding]:
         alerts = data.get("alerts", [])
         
         evaluable = []
-        for a in alerts:
-            if a.get("disposition") != "Closed": continue
+        violation_alerts = []
+        
+        for alert in alerts:
+            # Must be closed
+            if alert.get("disposition") != "Closed":
+                continue
+                
+            case_row = store.get_case_for_alert(alert.get("alert_id"))
+            
+            # Resolve expectation
+            expected = resolve_escalation_expectation(alert, case_row=case_row)
+            if expected != EXPECTATION_YES:
+                continue
+                
+            # If expected=YES, check observation
+            obs = alert.get("escalated")
+            if not is_available(obs):
+                # Coverage gap, not an execution gap
+                continue
+                
+            evaluable.append(alert)
+            if is_known_no(obs):
+                violation_alerts.append(alert)
+                
+        if not evaluable or not violation_alerts:
+            continue
+            
+        violation_count = len(violation_alerts)
+        total_evaluable = len(evaluable)
+        violation_rate = violation_count / total_evaluable
+        
+        top_asset_type = _get_top_asset_type(violation_alerts, store)
+        evidence = [a['alert_id'] for a in violation_alerts]
+        
+        findings.append(Finding(
+            finding_id=generate_finding_id(cse_id, "EG-1", 1),
+            cse_id=cse_id,
+            rule_id="EG-1",
+            category="execution_gap",
+            severity="HIGH",
+            title="Expected escalation not observed",
+            explanation=f"Critical/High alerts were observed to close without recorded escalation where escalation was expected. {violation_count} of {total_evaluable} evaluable alerts ({violation_rate:.0%}) lack escalation evidence.",
+            evidence_ids=evidence,
+            metric_value=violation_rate,
+            related_asset_type=top_asset_type
+        ))
+        
+    return findings
+
+def check_eg2_missing_investigation(store: DataStore) -> list[Finding]:
+    """
+    EG-2: Alerts closed without investigation evidence where expected.
+    Aggregated at the CSE level.
+    """
+    findings = []
+    
+    for cse_id in store._profiles_idx.keys():
+        data = store.get_cse_data(cse_id)
+        alerts = data.get("alerts", [])
+        
+        evaluable = []
+        violation_alerts = []
+        
+        for alert in alerts:
+            if alert.get("disposition") != "Closed":
+                continue
+                
+            expected = resolve_investigation_expectation(alert)
+            if expected != EXPECTATION_YES:
+                continue
+                
+            # Check observation
+            inv_present = alert.get("investigation_present")
+            case_row = store.get_case_for_alert(alert.get("alert_id"))
+            
+            # Reconcile evidence. If either says yes, it's a yes. 
+            # If both say NO (or bypassed), it's a NO.
+            # If missing/unavailable, it's unavailable.
+            case_bypassed = False
+            if case_row and case_row.get("investigation_status") == "Bypassed":
+                case_bypassed = True
+                
+            if is_known_yes(inv_present) or (case_row and not case_bypassed and is_available(case_row.get("investigation_status"))):
+                # Investigation occurred
+                evaluable.append(alert)
+            elif is_known_no(inv_present) or case_bypassed:
+                # Confirmed NO investigation
+                evaluable.append(alert)
+                violation_alerts.append(alert)
+            else:
+                # Insufficient evidence (NOT_AVAILABLE)
+                continue
+                
+        if not evaluable or not violation_alerts:
+            continue
+            
+        violation_count = len(violation_alerts)
+        total_evaluable = len(evaluable)
+        violation_rate = violation_count / total_evaluable
+        
+        has_critical = any(a.get("severity") == "Critical" for a in violation_alerts)
+        sev = "HIGH" if has_critical else "MEDIUM"
+        
+        top_asset_type = _get_top_asset_type(violation_alerts, store)
+        evidence = [a['alert_id'] for a in violation_alerts]
+        
+        findings.append(Finding(
+            finding_id=generate_finding_id(cse_id, "EG-2", 1),
+            cse_id=cse_id,
+            rule_id="EG-2",
+            category="execution_gap",
+            severity=sev,
+            title="Alerts closed without investigation",
+            explanation=f"Alerts required investigation, but available evidence indicates investigation did not occur. {violation_count} of {total_evaluable} evaluable alerts ({violation_rate:.0%}) lacked investigation prior to closure.",
+            evidence_ids=evidence,
+            metric_value=violation_rate,
+            related_asset_type=top_asset_type
+        ))
+        
+    return findings
+
+def check_eg3_fast_closure(store: DataStore) -> list[Finding]:
+    """
+    EG-3: Fast closure of alerts within configured threshold.
+    """
+    findings = []
+    
+    for cse_id in store._profiles_idx.keys():
+        data = store.get_cse_data(cse_id)
+        alerts = data.get("alerts", [])
+        
+        evaluable = []
+        fast_closed = []
+        
+        for alert in alerts:
+            if alert.get("disposition") != "Closed": 
+                continue
+            if alert.get("severity") not in ("Critical", "High"):
+                continue
+                
             try:
-                mins = float(a.get("closure_time_minutes", -1))
-                if mins >= 0:
-                    a["_mins"] = mins
-                    evaluable.append(a)
+                mins = float(alert.get("closure_time_minutes", -1))
+                # Exclude invalid negative durations (handled by DQ) or missing
+                if mins >= 0 and is_available(alert.get("closure_time_minutes")):
+                    alert["_mins"] = mins
+                    evaluable.append(alert)
+                    if mins < FAST_CLOSURE_MINUTES:
+                        fast_closed.append(alert)
             except (ValueError, TypeError):
                 continue
                 
-        if not evaluable:
+        if not evaluable or not fast_closed:
             continue
             
-        total_closed = len(evaluable)
-        fast_closed = [a for a in evaluable if a["_mins"] < FAST_CLOSURE_MINUTES]
         violation_count = len(fast_closed)
+        total_evaluable = len(evaluable)
+        violation_rate = violation_count / total_evaluable
         
-        if violation_count == 0:
-            continue
-            
-        violation_rate = violation_count / total_closed
         avg_fast_time = sum(a["_mins"] for a in fast_closed) / violation_count
         
         if violation_rate >= 0.15:
@@ -175,19 +218,18 @@ def check_eg3_fast_closure(store: DataStore) -> list[Finding]:
             rule_id="EG-3",
             category="execution_gap",
             severity=sev,
-            title="Potential fast-closure supervisory signal",
-            explanation=f"{violation_count} of {total_closed} closed High/Critical alerts ({violation_rate:.0%}) were resolved in under {FAST_CLOSURE_MINUTES} minutes (avg {avg_fast_time:.1f} min).",
+            title="Fast-closure supervisory signal",
+            explanation=f"Alert closure occurred within the configured fast-closure threshold; examiner review may be appropriate. {violation_count} of {total_evaluable} eligible closed alerts ({violation_rate:.0%}) were resolved in under {FAST_CLOSURE_MINUTES} minutes (avg {avg_fast_time:.1f} min).",
             evidence_ids=evidence,
             metric_value=violation_rate,
-            peer_value=None,
             related_asset_type=top_asset_type
         ))
+        
     return findings
 
 def check_eg4_repeated_no_remediation(store: DataStore) -> list[Finding]:
     """
-    EG-4: Repeated alerts without remediation on the same asset.
-    Generates one HIGH finding per violating asset.
+    EG-4: Repeated alerts without remediation progress on the same asset.
     """
     findings = []
     
@@ -195,26 +237,30 @@ def check_eg4_repeated_no_remediation(store: DataStore) -> list[Finding]:
         data = store.get_cse_data(cse_id)
         alerts = data.get("alerts", [])
         
-        # Group by asset
         asset_stats = {}
         for a in alerts:
             ast_id = a.get("asset_id")
-            if not ast_id: continue
-            
-            if ast_id not in asset_stats:
-                asset_stats[ast_id] = {"total": 0, "unremediated": 0, "evidence": []}
+            if not ast_id or not is_available(ast_id): 
+                continue
                 
-            asset_stats[ast_id]["total"] += 1
-            if a.get("remediation_present") == "No":
-                asset_stats[ast_id]["unremediated"] += 1
-            asset_stats[ast_id]["evidence"].append(a["alert_id"])
+            if ast_id not in asset_stats:
+                asset_stats[ast_id] = {"total_evaluable": 0, "unremediated": 0, "evidence": []}
+                
+            expected = resolve_remediation_expectation(a)
+            obs = a.get("remediation_present")
+            
+            if expected == EXPECTATION_YES and is_available(obs):
+                asset_stats[ast_id]["total_evaluable"] += 1
+                asset_stats[ast_id]["evidence"].append(a["alert_id"])
+                if is_known_no(obs):
+                    asset_stats[ast_id]["unremediated"] += 1
             
         # Evaluate violators
         finding_idx = 1
         for ast_id, stats in asset_stats.items():
-            if stats["total"] >= REPEAT_ALERT_THRESHOLD:
-                ratio = stats["unremediated"] / stats["total"]
-                if ratio >= REPEAT_NO_REMEDIATION_RATIO:
+            if stats["total_evaluable"] >= REPEAT_ALERT_MIN_COUNT:
+                ratio = stats["unremediated"] / stats["total_evaluable"]
+                if ratio >= REPEAT_UNREMEDIATED_RATIO:
                     ast_rec = store.get_asset_evidence(ast_id)
                     top_asset_type = ast_rec.get("asset_type", "Unknown") if ast_rec else "Unknown"
                     
@@ -224,11 +270,10 @@ def check_eg4_repeated_no_remediation(store: DataStore) -> list[Finding]:
                         rule_id="EG-4",
                         category="execution_gap",
                         severity="HIGH",
-                        title=f"Repeated alerts without remediation on asset {ast_id}",
-                        explanation=f"Asset {ast_id} sustained {stats['total']} repeated alerts with {stats['unremediated']} ({ratio:.0%}) lacking remediation evidence.",
+                        title="Repeated alerts without remediation progress",
+                        explanation=f"Repeated alerts for asset {ast_id} show limited recorded remediation progress. {stats['unremediated']} of {stats['total_evaluable']} ({ratio:.0%}) evaluable alerts lacked remediation evidence.",
                         evidence_ids=[ast_id] + stats["evidence"],
                         metric_value=ratio,
-                        peer_value=None,
                         related_asset_type=top_asset_type
                     ))
                     finding_idx += 1

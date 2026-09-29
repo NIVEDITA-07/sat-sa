@@ -1,14 +1,17 @@
 import re
 import pandas as pd
+import unicodedata
 from engine.findings import Finding
 from engine.data_store import DataStore
-from config import REPEATED_NOTE_THRESHOLD
+from config import REPEATED_NOTE_THRESHOLD, REPEATED_NOTE_MIN_LENGTH, REPEATED_NOTE_MIN_SHARE
 
 def generate_finding_id(cse_id: str, rule_id: str, index: int) -> str:
     return f"{cse_id}-{rule_id.replace('-', '')}-{index:03d}"
 
 def normalize_text(text: str) -> str:
     if not isinstance(text, str): return ""
+    # Unicode normalize
+    text = unicodedata.normalize('NFKD', text)
     text = text.lower()
     text = re.sub(r'[^\w\s]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
@@ -16,7 +19,7 @@ def normalize_text(text: str) -> str:
 
 def check_investigation_reuse(store: DataStore) -> list[Finding]:
     """
-    INVESTIGATION_REUSE (I-1): Detects repeated/boilerplate investigation notes.
+    INVESTIGATION_REUSE (I-1): Detects potential repeated/boilerplate investigation notes.
     """
     findings = []
     
@@ -30,18 +33,23 @@ def check_investigation_reuse(store: DataStore) -> list[Finding]:
         
         # Group notes by investigator
         investigator_notes = {}
+        investigator_total_notes = {}
+        
         for _, row in cse_cases.iterrows():
             note = row.get("investigation_note")
             if pd.isna(note) or str(note).strip() == "": continue
             
             norm_note = normalize_text(str(note))
-            if len(norm_note) < 20: continue
+            if len(norm_note) < REPEATED_NOTE_MIN_LENGTH: continue
             
             inv_id = row.get("investigator_id", "Unknown")
             case_id = row.get("case_id")
             
             if inv_id not in investigator_notes:
                 investigator_notes[inv_id] = {}
+                investigator_total_notes[inv_id] = 0
+                
+            investigator_total_notes[inv_id] += 1
                 
             if norm_note not in investigator_notes[inv_id]:
                 investigator_notes[inv_id][norm_note] = []
@@ -49,21 +57,22 @@ def check_investigation_reuse(store: DataStore) -> list[Finding]:
             
         finding_idx = 1
         for inv_id, patterns in investigator_notes.items():
-            # Check if this investigator has ANY note that meets the threshold
-            violating_notes = {note: cases for note, cases in patterns.items() if len(cases) >= REPEATED_NOTE_THRESHOLD}
+            total_notes = investigator_total_notes[inv_id]
+            if total_notes == 0: continue
             
-            if violating_notes:
-                # Investigator exceeded threshold for at least one note.
-                # Gather all cases for this investigator as evidence to match ground truth expectations.
-                all_inv_cases = []
-                for cases in patterns.values():
-                    all_inv_cases.extend(cases)
+            violating_notes = {}
+            for note, cases in patterns.items():
+                freq = len(cases)
+                share = freq / total_notes
+                if freq >= REPEATED_NOTE_THRESHOLD and share >= REPEATED_NOTE_MIN_SHARE:
+                    violating_notes[note] = cases
                     
-                # Use the most frequent violating note for the display explanation
+            if violating_notes:
                 worst_note = max(violating_notes.items(), key=lambda x: len(x[1]))
                 worst_norm_note = worst_note[0]
                 worst_cases = worst_note[1]
                 max_freq = len(worst_cases)
+                share = max_freq / total_notes
                 
                 sev = "HIGH" if max_freq >= REPEATED_NOTE_THRESHOLD * 2 else "MEDIUM"
                 
@@ -78,9 +87,9 @@ def check_investigation_reuse(store: DataStore) -> list[Finding]:
                     rule_id="I-1",
                     category="investigation_reuse",
                     severity=sev,
-                    title="Repeated investigation-note pattern detected; examiner review required",
-                    explanation=f"Investigator '{inv_id}' reused identical boilerplate text (max {max_freq} times). First observed note: \"{str(display_note)[:100]}...\"",
-                    evidence_ids=all_inv_cases,
+                    title="Potential investigation note reuse",
+                    explanation=f"Repeated identical investigation-note text was observed for multiple cases. Investigator '{inv_id}' reused identical boilerplate text {max_freq} times ({share:.0%} of their notes).",
+                    evidence_ids=worst_cases,
                     metric_value=max_freq,
                     peer_value=None,
                     related_asset_type=f"Investigator {inv_id}"

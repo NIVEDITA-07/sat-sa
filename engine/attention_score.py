@@ -1,24 +1,36 @@
 from engine.findings import Finding, CSEAttention
-from config import SCORE_WEIGHT_HIGH, SCORE_WEIGHT_MEDIUM, SCORE_WEIGHT_LOW, SCORE_LEVEL_HIGH_MIN, SCORE_LEVEL_MEDIUM_MIN
+from config import ATTENTION_WEIGHTS, ATTENTION_LEVEL_THRESHOLDS
 from engine.data_store import DataStore
 import pandas as pd
 
 def compute_attention(cse_id: str, findings: list[Finding], store: DataStore) -> CSEAttention:
     """
     Computes final attention score and KPI summary for a CSE.
+    Attention score is calculated from unique supervisory signals (rule_id),
+    preventing score explosion from duplicated evidence or multiple finding records.
     """
     score = 0.0
+    
+    # Map rule_id -> max severity found
+    unique_signals = {}
+    
     for f in findings:
-        if f.severity == "HIGH":
-            score += SCORE_WEIGHT_HIGH
-        elif f.severity == "MEDIUM":
-            score += SCORE_WEIGHT_MEDIUM
-        else:
-            score += SCORE_WEIGHT_LOW
+        r_id = f.rule_id
+        sev = f.severity
+        
+        weight = ATTENTION_WEIGHTS.get(sev, 0)
+        current_max = unique_signals.get(r_id, 0)
+        
+        if weight > current_max:
+            unique_signals[r_id] = weight
             
-    if score >= SCORE_LEVEL_HIGH_MIN:
+    # Sum the max contribution of each unique signal
+    for r_id, weight in unique_signals.items():
+        score += weight
+            
+    if score >= ATTENTION_LEVEL_THRESHOLDS["HIGH"]:
         level = "HIGH"
-    elif score >= SCORE_LEVEL_MEDIUM_MIN:
+    elif score >= ATTENTION_LEVEL_THRESHOLDS["MEDIUM"]:
         level = "MEDIUM"
     else:
         level = "LOW"
@@ -34,20 +46,21 @@ def compute_attention(cse_id: str, findings: list[Finding], store: DataStore) ->
     else:
         esc_rate, closure_rate, ack_rate = 100, 100, 100
         
-    # Dynamically read KPIs from cse_profiles_df
     kpis = {}
     profile = data.get("profile", {})
     if profile:
-        # Assumes values like 0.94 in the CSV need to be shown as 94%
-        if 'reported_escalation_rate' in profile and pd.notna(profile['reported_escalation_rate']):
-            esc_val = profile['reported_escalation_rate']
-            kpis["escalation_sla"] = f"{int(float(esc_val)*100)}%" if isinstance(esc_val, (int, float, str)) else f"{esc_rate}%"
-        if 'reported_investigation_rate' in profile and pd.notna(profile['reported_investigation_rate']):
-            ack_val = profile['reported_investigation_rate'] # Use this for ack/investigation proxy
-            kpis["ack_sla"] = f"{int(float(ack_val)*100)}%" if isinstance(ack_val, (int, float, str)) else f"{ack_rate}%"
-        if 'reported_monitoring_coverage' in profile and pd.notna(profile['reported_monitoring_coverage']):
-            closure_val = profile['reported_monitoring_coverage'] # Proxy for closure/coverage
-            kpis["closure_sla"] = f"{int(float(closure_val)*100)}%" if isinstance(closure_val, (int, float, str)) else f"{closure_rate}%"
+        def _fmt(val, default):
+            if pd.isna(val): return f"{default}%"
+            try:
+                num = float(str(val).strip().replace('%', ''))
+                if num <= 1.0 and num > 0: num *= 100
+                return f"{int(num)}%"
+            except ValueError:
+                return f"{default}%"
+                
+        kpis["escalation_sla"] = _fmt(profile.get('reported_escalation_rate'), esc_rate)
+        kpis["ack_sla"] = _fmt(profile.get('reported_investigation_rate'), ack_rate)
+        kpis["closure_sla"] = _fmt(profile.get('reported_monitoring_coverage'), closure_rate)
                 
     if not kpis:
         kpis = {

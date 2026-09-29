@@ -74,12 +74,12 @@ def run_analytical_engine(store: DataStore, ingestion_meta: dict = None) -> dict
         cse_attentions[cse_id] = att
         
     # 6. Compute Sector-Wide Signals
-    sector_signals = compute_sector_wide_signals(all_findings, len(cse_ids))
+    sector_signals = compute_sector_wide_signals(all_findings, coverage_info)
         
     # 7. Ground Truth Validation
-    from engine.validation import load_ground_truth, validate_findings
-    gt_df = load_ground_truth()
-    validation_metrics = validate_findings(cse_attentions, gt_df)
+    # validation is now disabled from inside the pipeline to strictly keep ground truth separate.
+    # It will run in bootstrap.py after the engine returns.
+    validation_metrics = {}
         
     return {
         "cse_attentions": cse_attentions,
