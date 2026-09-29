@@ -1,0 +1,93 @@
+import pandas as pd
+from engine.schema import validate_schema
+from engine.execution_gaps import (
+    check_eg1_critical_no_escalation,
+    check_eg2_missing_investigation,
+    check_eg3_fast_closure,
+    check_eg4_repeated_no_remediation
+)
+from engine.negative_space import check_ns1_blind_spot
+from engine.peer_comparison import check_peer1_deviation
+from engine.attention_score import compute_attention
+from engine.sector_wide import compute_sector_wide_signals
+
+from engine.temporal_drift import check_temporal_drift
+from engine.kpi_contradiction import check_kpi_contradiction
+from engine.investigation_reuse import check_investigation_reuse
+from engine.data_store import DataStore
+
+def run_analytical_engine(store: DataStore, ingestion_meta: dict = None) -> dict:
+    """
+    Core pipeline that executes all rules and generates canonical findings.
+    """
+    alerts_df = store.alerts_df
+    assets_df = store.assets_df
+    cases_df = store.cases_df
+    cse_profiles_df = store.cse_profiles_df
+    
+    # 1. Validate Schema
+    validate_schema(alerts_df, assets_df, cases_df)
+    
+    # 2. Evidence Coverage
+    from engine.evidence_coverage import check_evidence_coverage
+    coverage_info = check_evidence_coverage(store)
+    
+    # 3. Execute Rules (Generates Flat List of Findings, observing availability)
+    all_findings = []
+    
+    from engine.data_quality import check_data_quality
+    all_findings.extend(check_data_quality(store))
+    all_findings.extend(check_eg1_critical_no_escalation(store))
+    all_findings.extend(check_eg2_missing_investigation(store))
+    all_findings.extend(check_eg3_fast_closure(store))
+    all_findings.extend(check_eg4_repeated_no_remediation(store))
+    all_findings.extend(check_ns1_blind_spot(store))
+    all_findings.extend(check_peer1_deviation(store))
+    all_findings.extend(check_temporal_drift(store))
+    all_findings.extend(check_kpi_contradiction(store))
+    all_findings.extend(check_investigation_reuse(store))
+    
+    # Filter out findings for CSEs that didn't have evidence for that rule
+    filtered_findings = []
+    for f in all_findings:
+        cse = f.cse_id
+        rule = f.rule_id
+        if coverage_info.get(cse, {}).get("rule_availability", {}).get(rule, "READY") == "READY":
+            filtered_findings.append(f)
+            
+    all_findings = filtered_findings
+    
+    # 4. Group Findings by CSE
+    cse_ids = sorted(list(store._profiles_idx.keys()))
+    
+    cse_findings_map = {cse_id: [] for cse_id in cse_ids}
+    for f in all_findings:
+        if f.cse_id in cse_findings_map:
+            cse_findings_map[f.cse_id].append(f)
+            
+    # 5. Compute Attention Scores & KPIs
+    cse_attentions = {}
+    for cse_id, findings in cse_findings_map.items():
+        att = compute_attention(cse_id, findings, store)
+        att.evidence_coverage = coverage_info.get(cse_id, {}).get("coverage_summary", {})
+        att.evidence_warnings = coverage_info.get(cse_id, {}).get("warnings", [])
+        cse_attentions[cse_id] = att
+        
+    # 6. Compute Sector-Wide Signals
+    sector_signals = compute_sector_wide_signals(all_findings, len(cse_ids))
+        
+    # 7. Ground Truth Validation
+    from engine.validation import load_ground_truth, validate_findings
+    gt_df = load_ground_truth()
+    validation_metrics = validate_findings(cse_attentions, gt_df)
+        
+    return {
+        "cse_attentions": cse_attentions,
+        "alerts_df": alerts_df,
+        "assets_df": assets_df,
+        "cases_df": cases_df,
+        "sector_signals": sector_signals,
+        "coverage": coverage_info,
+        "validation_metrics": validation_metrics,
+        "ingestion_meta": ingestion_meta or {}
+    }
