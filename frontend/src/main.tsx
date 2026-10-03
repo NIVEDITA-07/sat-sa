@@ -3,6 +3,24 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 type Level = "HIGH" | "MEDIUM" | "LOW";
+type EvidenceLineage = {
+  source_name: string;
+  source_type: string;
+  source_record_id: string;
+  normalized_record_id: string;
+  record_type: string;
+  relevant_fields: Record<string, any>;
+};
+
+type FindingProvenance = {
+  rule_version: string;
+  assessment_id: string;
+  analysis_timestamp: string;
+  configuration_version: string;
+  evidence_lineage: EvidenceLineage[];
+  aggregate_context: Record<string, any>;
+};
+
 type Finding = {
   finding_id: string;
   cse_id: string;
@@ -15,6 +33,7 @@ type Finding = {
   metric_value: number | null;
   peer_value: number | null;
   related_asset_type: string | null;
+  provenance?: FindingProvenance;
 };
 type Entity = {
   cse_id: string;
@@ -1313,6 +1332,22 @@ function App() {
                       selectedFinding.rule_id}
                   </b>
                 </div>
+                {selectedFinding.provenance && (
+                  <>
+                    <div className="kv">
+                      <span>Version</span>
+                      <b>{selectedFinding.provenance.rule_version}</b>
+                    </div>
+                    <div className="kv">
+                      <span>Config Hash</span>
+                      <b>{selectedFinding.provenance.configuration_version}</b>
+                    </div>
+                    <div className="kv">
+                      <span>Assessment</span>
+                      <b>{selectedFinding.provenance.assessment_id}</b>
+                    </div>
+                  </>
+                )}
                 <div className="kv">
                   <span>Category</span>
                   <b>{titleCase(selectedFinding.category)}</b>
@@ -1327,15 +1362,43 @@ function App() {
               <section>
                 <h3>
                   Source evidence{" "}
-                  <span>({count(selectedFinding.evidence_ids.length)})</span>
+                  <span>({count(selectedFinding.provenance?.evidence_lineage?.length || selectedFinding.evidence_ids.length)})</span>
                 </h3>
                 <p className="hint">
                   Select a record to inspect the submitted fields. Showing{" "}
-                  {Math.min(evidenceLimit, selectedFinding.evidence_ids.length)}{" "}
+                  {Math.min(evidenceLimit, selectedFinding.provenance?.evidence_lineage?.length || selectedFinding.evidence_ids.length)}{" "}
                   references.
                 </p>
                 <div className="evidence-list">
-                  {selectedFinding.evidence_ids.length ? (
+                  {selectedFinding.provenance?.evidence_lineage?.length ? (
+                    selectedFinding.provenance.evidence_lineage
+                      .slice(0, evidenceLimit)
+                      .map((lineage, i) => (
+                        <button
+                          key={`${lineage.source_record_id}-${i}`}
+                          disabled={!kindFor(lineage.source_record_id)}
+                          onClick={() => openEvidence(lineage.source_record_id)}
+                          style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "4px" }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", width: "100%" }}>
+                            <code>{lineage.source_record_id}</code>
+                            <span>
+                              {kindFor(lineage.source_record_id) ? "View record →" : "Reference only"}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                            Source: {lineage.source_name}
+                          </div>
+                          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "4px" }}>
+                            {Object.entries(lineage.relevant_fields).map(([k, v]) => (
+                              <span key={k} style={{ background: "var(--bg)", padding: "2px 6px", borderRadius: "4px", fontSize: "0.75rem", border: "1px solid var(--border)" }}>
+                                {k}: {v == null || v === "" ? "Not available" : String(v)}
+                              </span>
+                            ))}
+                          </div>
+                        </button>
+                      ))
+                  ) : selectedFinding.evidence_ids.length ? (
                     selectedFinding.evidence_ids
                       .slice(0, evidenceLimit)
                       .map((id, i) => (
@@ -1354,7 +1417,7 @@ function App() {
                     <p>No record IDs were attached to this finding.</p>
                   )}
                 </div>
-                {selectedFinding.evidence_ids.length > evidenceLimit && (
+                {(selectedFinding.provenance?.evidence_lineage?.length || selectedFinding.evidence_ids.length) > evidenceLimit && (
                   <button
                     className="show-more"
                     onClick={() => setEvidenceLimit(evidenceLimit + 30)}
@@ -1362,7 +1425,7 @@ function App() {
                     Show next{" "}
                     {Math.min(
                       30,
-                      selectedFinding.evidence_ids.length - evidenceLimit,
+                      (selectedFinding.provenance?.evidence_lineage?.length || selectedFinding.evidence_ids.length) - evidenceLimit,
                     )}{" "}
                     references
                   </button>

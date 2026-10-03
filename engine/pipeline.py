@@ -69,6 +69,9 @@ def run_analytical_engine(store: DataStore, ingestion_meta: dict = None) -> dict
 
     all_findings = filtered_findings
 
+    # Phase 2: Attach Provenance Lineage
+    from engine.provenance import attach_provenance
+    all_findings = attach_provenance(all_findings, store, ingestion_meta or {})
     
     # 4. Group Findings by CSE
     cse_ids = sorted(list(store._profiles_idx.keys()))

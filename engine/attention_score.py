@@ -11,7 +11,7 @@ def compute_attention(cse_id: str, findings: list[Finding], store: DataStore) ->
     """
     score = 0.0
     
-    # Map rule_id -> max severity found
+    # Map rule_id -> (max weight, finding_id, severity)
     unique_signals = {}
     
     for f in findings:
@@ -19,14 +19,23 @@ def compute_attention(cse_id: str, findings: list[Finding], store: DataStore) ->
         sev = f.severity
         
         weight = ATTENTION_WEIGHTS.get(sev, 0)
-        current_max = unique_signals.get(r_id, 0)
+        current_max_weight = unique_signals.get(r_id, (0, "", ""))[0]
         
-        if weight > current_max:
-            unique_signals[r_id] = weight
+        if weight > current_max_weight:
+            unique_signals[r_id] = (weight, f.finding_id, sev)
             
     # Sum the max contribution of each unique signal
-    for r_id, weight in unique_signals.items():
+    contributions = []
+    for r_id, (weight, f_id, sev) in unique_signals.items():
         score += weight
+        if weight > 0:
+            from engine.findings import AttentionContribution
+            contributions.append(AttentionContribution(
+                rule_id=r_id,
+                finding_id=f_id,
+                severity=sev,
+                contribution_weight=weight
+            ))
             
     if score >= ATTENTION_LEVEL_THRESHOLDS["HIGH"]:
         level = "HIGH"
@@ -74,5 +83,6 @@ def compute_attention(cse_id: str, findings: list[Finding], store: DataStore) ->
         attention_score=score,
         attention_level=level,
         findings=findings,
-        kpi_summary=kpis
+        kpi_summary=kpis,
+        contributions=contributions
     )
