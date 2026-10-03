@@ -47,15 +47,28 @@ def run_analytical_engine(store: DataStore, ingestion_meta: dict = None) -> dict
     all_findings.extend(check_kpi_contradiction(store))
     all_findings.extend(check_investigation_reuse(store))
     
-    # Filter out findings for CSEs that didn't have evidence for that rule
+    # Filter out findings for CSEs that didn't have evidence for that rule.
+    # Phase 1: use EvaluabilityResult.evaluable when available; fall back to
+    # the string vocabulary for backward compatibility.
     filtered_findings = []
     for f in all_findings:
-        cse = f.cse_id
+        cse  = f.cse_id
         rule = f.rule_id
-        if coverage_info.get(cse, {}).get("rule_availability", {}).get(rule, "READY") == "READY":
-            filtered_findings.append(f)
-            
+        cse_cov = coverage_info.get(cse, {})
+
+        # Prefer the typed EvaluabilityResult (Phase 1 gate)
+        gate = cse_cov.get("evaluability", {}).get(rule)
+        if gate is not None:
+            if gate.evaluable:
+                filtered_findings.append(f)
+        else:
+            # Legacy fallback: string check
+            status = cse_cov.get("rule_availability", {}).get(rule, "READY")
+            if status in ("READY", "PARTIALLY EVALUABLE"):
+                filtered_findings.append(f)
+
     all_findings = filtered_findings
+
     
     # 4. Group Findings by CSE
     cse_ids = sorted(list(store._profiles_idx.keys()))

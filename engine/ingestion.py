@@ -135,9 +135,9 @@ def ingest_data(alerts_df: pd.DataFrame, assets_df: pd.DataFrame, cases_df: pd.D
     norm_alerts, map_alerts = normalize_dataset(alerts_df, profile["alerts_map"], CANONICAL_ALERTS)
     norm_assets, map_assets = normalize_dataset(assets_df, profile["assets_map"], CANONICAL_ASSETS)
     norm_cases, map_cases = normalize_dataset(cases_df, profile["cases_map"], CANONICAL_CASES)
-    
-    from datetime import datetime
-    
+
+    from datetime import datetime, timezone
+
     return {
         "alerts_df": norm_alerts,
         "assets_df": norm_assets,
@@ -149,6 +149,7 @@ def ingest_data(alerts_df: pd.DataFrame, assets_df: pd.DataFrame, cases_df: pd.D
             "source_name": profile["name"],
             "type": profile["type"],
             "records": len(norm_alerts) + len(norm_assets) + len(norm_cases),
-            "ingestion_timestamp": datetime.utcnow().isoformat() + "Z"
+            "ingestion_timestamp": datetime.now(timezone.utc).isoformat()
         }
     }
+
