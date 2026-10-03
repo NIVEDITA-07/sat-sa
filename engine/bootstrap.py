@@ -55,11 +55,24 @@ def load_and_run_pipeline(profile_key: str = "CONTROLLED_DEMO", alerts_df=None, 
             
         if scenario and scenario != "None" and scenario != "Healthy SOC":
             alerts_df, assets_df, cases_df = generate_scenario(scenario)
+            files_map = {}
         else:
             # Load the base static dataset (the controlled demo data generated in Phase 2)
-            alerts_df = pd.read_csv(os.path.join(data_dir, "alerts.csv"))
-            assets_df = pd.read_csv(os.path.join(data_dir, "assets.csv"))
-            cases_df = pd.read_csv(os.path.join(data_dir, "cases.csv"))
+            alerts_path = os.path.join(data_dir, "alerts.csv")
+            assets_path = os.path.join(data_dir, "assets.csv")
+            cases_path = os.path.join(data_dir, "cases.csv")
+            cse_profiles_path = os.path.join(data_dir, "cse_profiles.csv")
+            
+            alerts_df = pd.read_csv(alerts_path)
+            assets_df = pd.read_csv(assets_path)
+            cases_df = pd.read_csv(cases_path)
+            
+            files_map = {
+                "alerts.csv": alerts_path,
+                "assets.csv": assets_path,
+                "cases.csv": cases_path,
+                "cse_profiles.csv": cse_profiles_path
+            }
 
             if profile_key == "PUBLIC_SOC":
                 # For the public demo, let's simulate missing columns by dropping some from the loaded dataset
@@ -95,6 +108,21 @@ def load_and_run_pipeline(profile_key: str = "CONTROLLED_DEMO", alerts_df=None, 
     # 3. Independent Validation
     from engine.validation import load_ground_truth, validate_findings
     gt_df = load_ground_truth()
-    results["validation_metrics"] = validate_findings(results["cse_attentions"], gt_df)
+    # 4. Integrity Capture & Verification
+    assessment_id = "SATSA-2026-001" # Fixed assessment ID for demo MVP
+    ingestion_payload["provenance"]["assessment_id"] = assessment_id
+    
+    integrity_result = None
+    if "files_map" in locals() and files_map:
+        from engine.integrity import capture_assessment_integrity, verify_assessment_integrity, get_manifest_path
+        import os
+        
+        manifest_path = get_manifest_path(assessment_id)
+        if not os.path.exists(manifest_path):
+            capture_assessment_integrity(assessment_id, files_map)
+            
+        integrity_result = verify_assessment_integrity(assessment_id, files_map)
+        
+    results["integrity"] = integrity_result
     
     return results

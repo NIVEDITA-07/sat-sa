@@ -32,6 +32,10 @@ SAT-SA (Supervisory Analytics Tool for SOC Assessment) is an offline, determinis
 - **Blazing Fast React UI**: A custom-built, modern frontend designed specifically for human examiners, featuring a Guided Demo Workflow to effortlessly onboard new judges.
 - **100% Offline & Local**: Runs entirely locally via a Python API adapter and a Vite/React frontend. No data leaves the machine.
 
+### PHASE 3 — EVIDENCE INTEGRITY
+SAT-SA creates a local cryptographic integrity manifest for assessment evidence using SHA-256.
+This allows the system to detect whether source artifacts have changed relative to the evidence state recorded for an assessment. (Note: This is tamper-evident, not an absolute tamper-proof blockchain solution).
+
 ---
 
 ## 🏗️ Core Architecture

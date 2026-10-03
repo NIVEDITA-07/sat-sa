@@ -130,6 +130,7 @@ def snapshot():
             "sector_signals": _data.get("sector_signals", []),
             "validation": validation.get("summary", {}),
             "validation_status": validation.get("status"),
+            "integrity": _data.get("integrity")
         })
         return _snapshot
 

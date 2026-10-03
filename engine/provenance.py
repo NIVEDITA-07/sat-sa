@@ -105,7 +105,10 @@ def attach_provenance(findings: list[Finding], store: DataStore, ingestion_meta:
     """Attaches formal lineage and provenance to a list of findings."""
     analysis_time = datetime.now(timezone.utc).isoformat()
     config_version = f"cfg-{get_config_hash()}"
-    assessment_id = ingestion_meta.get("provenance", {}).get("ingestion_timestamp", analysis_time)
+    assessment_id = ingestion_meta.get("provenance", {}).get("assessment_id")
+    if not assessment_id:
+        fallback = ingestion_meta.get("provenance", {}).get("ingestion_timestamp", analysis_time)
+        assessment_id = f"run-{hashlib.md5(fallback.encode()).hexdigest()[:8]}"
     
     for f in findings:
         r_id = f.rule_id
@@ -133,7 +136,7 @@ def attach_provenance(findings: list[Finding], store: DataStore, ingestion_meta:
         
         f.provenance = FindingProvenance(
             rule_version=f"{r_id}:{RULE_VERSIONS.get(r_id, 'v1.0')}",
-            assessment_id=f"run-{hashlib.md5(assessment_id.encode()).hexdigest()[:8]}",
+            assessment_id=assessment_id,
             analysis_timestamp=analysis_time,
             configuration_version=config_version,
             evidence_lineage=build_evidence_lineage(store, f.evidence_ids, r_id, ingestion_meta),

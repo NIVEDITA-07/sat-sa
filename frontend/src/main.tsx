@@ -78,6 +78,23 @@ type Snapshot = {
     unexpected_detections?: number;
   };
   validation_status?: string;
+  integrity?: {
+    assessment_id: string;
+    overall_status: string;
+    verified_at: string;
+    artifacts_checked: number;
+    unchanged_count: number;
+    changed_count: number;
+    missing_count: number;
+    unavailable_count: number;
+    artifact_results: {
+      source_name: string;
+      expected_hash: string;
+      current_hash: string | null;
+      status: string;
+      reason: string | null;
+    }[];
+  };
 };
 type Evidence = {
   kind: string;
@@ -1229,6 +1246,48 @@ function App() {
                         </p>
                       )}
                     </section>
+                    {data.integrity && (
+                      <section className="panel">
+                        <div className="section-head">
+                          <div>
+                            <h2>Evidence Integrity</h2>
+                            <p>Tamper-evident verification against captured state (SHA-256)</p>
+                          </div>
+                          <div>
+                            <Badge level={data.integrity.overall_status === "UNCHANGED" ? "LOW" : data.integrity.overall_status === "CHANGED" ? "HIGH" : "MEDIUM"} />
+                            <span style={{ marginLeft: "8px", fontWeight: "bold" }}>{data.integrity.overall_status}</span>
+                          </div>
+                        </div>
+                        <div className="kv">
+                          <span>Assessment ID</span>
+                          <b>{data.integrity.assessment_id}</b>
+                        </div>
+                        <div className="kv">
+                          <span>Verified At</span>
+                          <b>{data.integrity.verified_at}</b>
+                        </div>
+                        <div style={{ marginTop: "16px" }}>
+                          {data.integrity.artifact_results.map(ar => (
+                            <div key={ar.source_name} style={{ padding: "12px", border: "1px solid var(--border)", borderRadius: "6px", marginBottom: "8px", background: ar.status === "UNCHANGED" ? "var(--bg)" : "var(--bg-card)" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+                                <strong>{ar.source_name}</strong>
+                                <span style={{ color: ar.status === "UNCHANGED" ? "var(--success)" : "var(--accent)", fontWeight: "bold" }}>{ar.status}</span>
+                              </div>
+                              <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", display: "flex", flexDirection: "column", gap: "4px" }}>
+                                <div>Expected SHA-256: <code>{ar.expected_hash}</code></div>
+                                {ar.status === "CHANGED" && (
+                                  <div>Current SHA-256: <code>{ar.current_hash || "None"}</code></div>
+                                )}
+                                {ar.reason && <div>Note: {ar.reason}</div>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="fine-print" style={{ marginTop: "12px" }}>
+                          This verification detects changes to the source files since the initial integrity manifest was captured. A hash mismatch (CHANGED) indicates the file was modified, but does not definitively prove malicious tampering.
+                        </p>
+                      </section>
+                    )}
                     <section className="panel">
                       <div className="section-head">
                         <div>
