@@ -1274,9 +1274,9 @@ function App() {
                                 <span style={{ color: ar.status === "UNCHANGED" ? "var(--success)" : "var(--accent)", fontWeight: "bold" }}>{ar.status}</span>
                               </div>
                               <div style={{ fontSize: "0.8rem", color: "var(--text-secondary)", display: "flex", flexDirection: "column", gap: "4px" }}>
-                                <div>Expected SHA-256: <code>{ar.expected_hash}</code></div>
+                                <div style={{ wordBreak: "break-all" }}>Expected SHA-256: <br/><code>{ar.expected_hash}</code></div>
                                 {ar.status === "CHANGED" && (
-                                  <div>Current SHA-256: <code>{ar.current_hash || "None"}</code></div>
+                                  <div style={{ wordBreak: "break-all" }}>Current SHA-256: <br/><code>{ar.current_hash || "None"}</code></div>
                                 )}
                                 {ar.reason && <div>Note: {ar.reason}</div>}
                               </div>
