@@ -411,6 +411,15 @@ function App() {
             Evidence from a periodic submission. Examiner review required for
             every finding.
           </p>
+          <div style={{ marginTop: "12px", padding: "8px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "4px", color: "var(--accent)" }}>
+            <strong style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+              SIH PRESENTATION
+            </strong>
+            <p style={{ marginTop: "4px", marginBottom: 0, opacity: 0.9, lineHeight: "1.3" }}>
+              This web version is hosted for presentation only. SAT-SA is fundamentally a 100% offline, local desktop app.
+            </p>
+          </div>
         </div>
       </aside>
       <div className="main-wrap">
