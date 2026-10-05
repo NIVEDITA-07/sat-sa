@@ -130,7 +130,7 @@ def snapshot():
             "sector_signals": _data.get("sector_signals", []),
             "validation": validation.get("summary", {}),
             "validation_status": validation.get("status"),
-            "integrity": _data.get("integrity")
+            "integrity": asdict(_data["integrity"]) if _data.get("integrity") else None
         })
         return _snapshot
 
@@ -214,5 +214,6 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     host = os.environ.get("SATSA_HOST", os.environ.get("HOST", "0.0.0.0"))
     port = int(os.environ.get("PORT", os.environ.get("SATSA_PORT", "8000")))
-    print(f"SAT-SA local application: http://{host}:{port}")
+    display_host = "localhost" if host == "0.0.0.0" else host
+    print(f"SAT-SA local application: http://{display_host}:{port}")
     ThreadingHTTPServer((host, port), Handler).serve_forever()

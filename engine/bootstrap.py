@@ -115,7 +115,6 @@ def load_and_run_pipeline(profile_key: str = "CONTROLLED_DEMO", alerts_df=None, 
     integrity_result = None
     if "files_map" in locals() and files_map:
         from engine.integrity import capture_assessment_integrity, verify_assessment_integrity, get_manifest_path
-        import os
         
         manifest_path = get_manifest_path(assessment_id)
         if not os.path.exists(manifest_path):

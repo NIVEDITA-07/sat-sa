@@ -1,0 +1,38 @@
+{
+  "assessment_id": "SATSA-2026-001",
+  "manifest_version": "1.0",
+  "created_at": "2026-10-05T16:38:07.557462+00:00",
+  "hash_algorithm": "SHA-256",
+  "engine_version": "1.0",
+  "configuration_version": "1.0",
+  "source_artifacts": [
+    {
+      "source_name": "alerts.csv",
+      "source_type": "csv",
+      "sha256": "3f3f12cfefb800f2532a557566162e4dfdcc55ebc66200209f8a5d36f1f01501",
+      "captured_at": "2026-10-05T16:38:07.557462+00:00",
+      "record_count": null
+    },
+    {
+      "source_name": "assets.csv",
+      "source_type": "csv",
+      "sha256": "c0f4ee059a144dce0c6c6c2b0082bf910a741b564a32b2ea03da8dae0ee3a1c7",
+      "captured_at": "2026-10-05T16:38:07.557462+00:00",
+      "record_count": null
+    },
+    {
+      "source_name": "cases.csv",
+      "source_type": "csv",
+      "sha256": "93c3621faf9eaf13ad11b618c7e92d36f4ddc8b700e5646d081f6bdc92aaaf7d",
+      "captured_at": "2026-10-05T16:38:07.557462+00:00",
+      "record_count": null
+    },
+    {
+      "source_name": "cse_profiles.csv",
+      "source_type": "csv",
+      "sha256": "5f7db04e90c54dfef7c166c28decdfd1e977408b151037a4736f029fae99b634",
+      "captured_at": "2026-10-05T16:38:07.557462+00:00",
+      "record_count": null
+    }
+  ]
+}
